@@ -1,0 +1,408 @@
+#!/usr/bin/env python3
+"""picimport — copy photos and videos into date-organized folders.
+
+Single-file CLI, Python 3.13 standard library only. Copy it anywhere on PATH
+(e.g. ~/.local/bin) and it just works. Reads each media file's EXIF capture
+time (built-in minimal parser, no dependencies) and files it under
+~/Pictures/Import/<YYYY-MM-DD>/ for images and ~/Videos/Import/<YYYY-MM-DD>/
+for videos. Copy-only by default; verified delete from source only after
+explicit confirmation.
+
+Usage:
+  picimport -i <path> [-n] [-y] [-p DIR] [-V DIR] [--config FILE]
+
+This file is part of picimport. Licensed under GPLv3; see LICENSE
+or <https://www.gnu.org/licenses/gpl-3.0.txt>.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import struct
+import sys
+import tomllib
+from datetime import date, datetime
+from pathlib import Path
+
+VERSION = "1.0.0"
+
+from datetime import datetime
+from pathlib import Path
+
+# Preference order: best first.
+_DATE_TAGS = (0x9003, 0x9004, 0x0132)  # DateTimeOriginal, Digitized, DateTime
+_EXIF_IFD_TAG = 0x8769
+
+_TYPE_SIZES = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8}
+
+_DATE_FORMATS = ("%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S")
+
+
+def _parse_date(value: str) -> datetime | None:
+    value = value.strip().strip("\x00")
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(value[:19], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _read_ascii(data: bytes, offset: int, count: int) -> str:
+    return data[offset : offset + count].decode("ascii", errors="replace")
+
+
+def _tiff_dates(data: bytes) -> dict[int, str]:
+    """Extract date-tag strings from a TIFF structure."""
+    if len(data) < 8:
+        raise ValueError("short TIFF")
+    order = data[:2]
+    if order == b"II":
+        endian = "<"
+    elif order == b"MM":
+        endian = ">"
+    else:
+        raise ValueError("bad byte order")
+    if struct.unpack(endian + "H", data[2:4])[0] != 42:
+        raise ValueError("bad magic")
+    ifd_offset = struct.unpack(endian + "I", data[4:8])[0]
+    dates: dict[int, str] = {}
+    seen_ifds = set()
+    while 0 < ifd_offset < len(data) and ifd_offset not in seen_ifds:
+        seen_ifds.add(ifd_offset)
+        entry_count = struct.unpack(endian + "H", data[ifd_offset : ifd_offset + 2])[0]
+        next_offset = struct.unpack(
+            endian + "I", data[ifd_offset + 2 : ifd_offset + 6]
+        )[0]
+        for i in range(entry_count):
+            base = ifd_offset + 2 + i * 12
+            tag, ftype, count = struct.unpack(
+                endian + "HHI", data[base : base + 8]
+            )
+            size = _TYPE_SIZES.get(ftype)
+            if size is None or count == 0 or count > 4096:
+                continue
+            total = size * count
+            if total <= 4:
+                value_offset = base + 8
+            else:
+                value_offset = struct.unpack(endian + "I", data[base + 8 : base + 12])[0]
+            if value_offset + min(total, 64) > len(data):
+                continue
+            if ftype == 2 and tag in _DATE_TAGS:
+                dates[tag] = _read_ascii(data, value_offset, count)
+            elif tag == _EXIF_IFD_TAG and ftype == 4:
+                next_offset = struct.unpack(
+                    endian + "I", data[value_offset : value_offset + 4]
+                )[0]
+        ifd_offset = next_offset
+    return dates
+
+
+def _jpeg_exif_tiff(path: Path) -> bytes | None:
+    """Return the raw TIFF block from a JPEG Exif APP1 segment, if any."""
+    with open(path, "rb") as fh:
+        if fh.read(2) != b"\xff\xd8":
+            return None
+        while True:
+            marker = fh.read(2)
+            if len(marker) < 2 or marker[0] != 0xFF or marker[1] in (0xD8, 0x01):
+                return None
+            while marker[1] == 0xFF:  # fill bytes
+                marker = marker[:1] + fh.read(1)
+            if marker[1] == 0xD9 or marker[1] == 0xDA:  # EOI / start of scan
+                return None
+            length_bytes = fh.read(2)
+            if len(length_bytes) < 2:
+                return None
+            length = int.from_bytes(length_bytes, "big") - 2
+            payload = fh.read(length)
+            if marker[1] == 0xE1 and payload.startswith(b"Exif\x00\x00"):
+                return payload[6:]
+            if length <= 0:
+                return None
+
+
+def read_capture_datetime(path: Path) -> datetime | None:
+    """Best-effort EXIF capture datetime; None if unavailable."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(4)
+        if head.startswith(b"\xff\xd8"):
+            tiff = _jpeg_exif_tiff(path)
+        elif head in (b"II*\x00", b"MM\x00*"):
+            tiff = path.read_bytes()
+        else:
+            tiff = None
+        if not tiff:
+            return None
+        dates = _tiff_dates(tiff)
+        for tag in _DATE_TAGS:
+            dt = _parse_date(dates[tag]) if tag in dates else None
+            if dt is not None:
+                return dt
+        return None
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# CLI section
+
+import argparse
+import os
+import shutil
+import sys
+import tomllib
+from datetime import date
+from pathlib import Path
+
+
+IMAGE_EXTENSIONS = frozenset(
+    {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".heic",
+        ".heif",
+        ".tif",
+        ".tiff",
+        ".cr2",
+        ".cr3",
+        ".nef",
+        ".arw",
+        ".orf",
+        ".rw2",
+        ".raf",
+        ".dng",
+    }
+)
+
+VIDEO_EXTENSIONS = frozenset(
+    {
+        ".mp4",
+        ".mov",
+        ".m4v",
+        ".avi",
+        ".mkv",
+        ".webm",
+        ".3gp",
+        ".mts",
+    }
+)
+
+MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
+
+DEFAULT_PICTURES_DIR = Path.home() / "Pictures" / "Import"
+DEFAULT_VIDEOS_DIR = Path.home() / "Videos" / "Import"
+
+CONFIG_KEYS = ("source_dir", "pictures_dir", "videos_dir")
+
+
+def config_path() -> Path:
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / "picimport" / "config.toml"
+
+
+def load_config(path: Path | None = None) -> dict[str, Path]:
+    """Read optional defaults; unknown keys and malformed values are ignored."""
+    path = path or config_path()
+    settings: dict[str, Path] = {}
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return settings
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        print(f"warning: ignoring unreadable config {path}: {exc}", file=sys.stderr)
+        return settings
+    for key in CONFIG_KEYS:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            settings[key] = Path(value).expanduser()
+    return settings
+
+
+def media_kind(path: Path) -> str:
+    return "video" if path.suffix.lower() in VIDEO_EXTENSIONS else "image"
+
+
+def capture_date(path: Path) -> date:
+    dt = read_capture_datetime(path)
+    if dt is not None:
+        return dt.date()
+    return date.fromtimestamp(path.stat().st_mtime)
+
+
+def iter_media(source: Path):
+    for path in sorted(source.rglob("*")):
+        if path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS:
+            yield path
+
+
+def resolve_target(dest_dir: Path, src: Path) -> Path | None:
+    """None means skip (same name+size exists); otherwise a safe target path."""
+    candidate = dest_dir / src.name
+    if not candidate.exists():
+        return candidate
+    try:
+        if candidate.stat().st_size == src.stat().st_size:
+            return None
+    except OSError as exc:
+        raise OSError(f"cannot inspect {candidate}: {exc}") from exc
+    stem, dot, ext = src.name.partition(".")
+    for i in range(1, 10_000):
+        alt = dest_dir / f"{stem}_{i}.{ext}" if dot else dest_dir / f"{stem}_{i}"
+        if not alt.exists():
+            return alt
+    raise OSError(f"no free name for {src} in {dest_dir}")
+
+
+def import_photos(
+    source: Path,
+    pictures_dir: Path,
+    videos_dir: Path,
+    dry_run: bool = False,
+    assume_yes: bool = False,
+) -> int:
+    if not source.is_dir():
+        print(f"error: source is not a directory: {source}", file=sys.stderr)
+        return 2
+
+    roots = {"image": pictures_dir, "video": videos_dir}
+    copied: list[tuple[Path, Path]] = []
+    counts = {"image": 0, "video": 0}
+    skipped = 0
+    failed = 0
+
+    for src in iter_media(source):
+        kind = media_kind(src)
+        try:
+            day = capture_date(src)
+        except OSError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            failed += 1
+            continue
+        dest_dir = roots[kind] / day.isoformat()
+        try:
+            target = resolve_target(dest_dir, src)
+        except OSError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            failed += 1
+            continue
+        if target is None:
+            skipped += 1
+            continue
+
+        if dry_run:
+            print(f"would copy {src} -> {target}")
+            counts[kind] += 1
+            continue
+
+        print(f"copying {src} -> {target}")
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, target)
+            if target.stat().st_size != src.stat().st_size:
+                raise OSError(f"verification failed for {target}")
+        except OSError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            failed += 1
+            try:
+                target.unlink()
+            except OSError:
+                pass
+            continue
+        copied.append((src, target))
+        counts[kind] += 1
+
+    if dry_run:
+        print(
+            f"dry run complete: "
+            f"{counts['image']} image(s), {counts['video']} video(s) would be copied; "
+            f"{skipped} would be skipped"
+        )
+        return 0
+
+    deleted = 0
+    # Every entry in `copied` passed the post-copy byte-length verification;
+    # failed files were never appended, so only safe candidates are listed.
+    if copied:
+        prompt = f"Delete {len(copied)} copied file(s) from {source}? [y/N] "
+        if assume_yes:
+            answer = "y"
+        else:
+            try:
+                answer = input(prompt).strip().lower()
+            except EOFError:
+                answer = ""
+        if answer in ("y", "yes"):
+            for src, _ in copied:
+                try:
+                    src.unlink()
+                    deleted += 1
+                except OSError as exc:
+                    print(f"error: could not delete {src}: {exc}", file=sys.stderr)
+
+    print(
+        f"Copied {counts['image']} image(s), {counts['video']} video(s), "
+        f"Skipped {skipped}, Failed {failed}, Deleted {deleted}"
+    )
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="picimport",
+        description=(
+            "Copy photos into ~/Pictures/Import/<date>/ and videos into "
+            "~/Videos/Import/<date>/ by EXIF capture date. Defaults may be set "
+            "in ~/.config/picimport/config.toml; command-line flags win."
+        ),
+    )
+    parser.add_argument("-i", "--input", type=Path,
+                        help="source directory containing media (default: source_dir from config)")
+    parser.add_argument("-p", "--pictures-dir", type=Path,
+                        help=f"destination root for images (default: {DEFAULT_PICTURES_DIR})")
+    parser.add_argument("-V", "--videos-dir", type=Path,
+                        help=f"destination root for videos (default: {DEFAULT_VIDEOS_DIR})")
+    parser.add_argument("--config", type=Path,
+                        help="alternative config file path")
+    parser.add_argument("-n", "--dry-run", action="store_true",
+                        help="show what would be done without copying")
+    parser.add_argument("-y", "--yes", action="store_true",
+                        help="auto-confirm deleting copied files from source")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    cfg = load_config(args.config)
+
+    source = (args.input or cfg.get("source_dir"))
+    pictures_dir = args.pictures_dir or cfg.get("pictures_dir") or DEFAULT_PICTURES_DIR
+    videos_dir = args.videos_dir or cfg.get("videos_dir") or DEFAULT_VIDEOS_DIR
+
+    if source is None:
+        print(
+            "error: no source given; pass -i PATH or set source_dir in "
+            f"{args.config or config_path()}",
+            file=sys.stderr,
+        )
+        return 2
+
+    return import_photos(
+        source.resolve(),
+        pictures_dir.expanduser(),
+        videos_dir.expanduser(),
+        args.dry_run,
+        args.yes,
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
