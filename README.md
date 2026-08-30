@@ -9,7 +9,7 @@ $ picimport -i /media/ian/SDCARD/DCIM
 copying .../100NIKON/DSC_0001.JPG -> ~/Pictures/Import/2026-08-22/DSC_0001.JPG
 copying .../100NIKON/DSC_0002.NEF -> ~/Pictures/Import/2026-08-22/DSC_0002.NEF
 copying .../100NIKON/DSC_0003.JPG -> ~/Pictures/Import/2026-08-15/DSC_0003.JPG
-Copied 0 image(s), 3 image(s), Skipped 0, Failed 0, Deleted 0
+Copied 3 image(s), 0 video(s), Skipped 0, Failed 0, Deleted 0
 ```
 
 ## Why this exists
