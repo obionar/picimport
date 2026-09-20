@@ -1,15 +1,25 @@
-# AGENTS.md — picimport integration guide for AI agents
+---
+name: picimport
+description: Use when importing photos/videos from a card or folder into date-organized folders.
+license: GPL-3.0-only
+tool-version: 1.0.0
+---
 
-This file teaches a coding/automation agent (Hermes, OpenClaw, Claude Code,
-etc.) how to use this tool correctly. Keep it in prompts as-is.
-
-## What this tool is
+# picimport — EXIF-dated media import from the terminal
 
 One-command media import for Linux: copies images into
-`~/Pictures/Import/<YYYY-MM-DD>/` and videos into `~/Videos/Import/<YYYY-MM-DD>/`
-by EXIF capture date. Single-file Python 3.13 (stdlib only), no install
-beyond copy-to-PATH. Copy-only by default — it deletes from the source only
-after byte-length-verified copy AND explicit confirmation.
+`~/Pictures/Import/<YYYY-MM-DD>/` and videos into
+`~/Videos/Import/<YYYY-MM-DD>/` by EXIF capture date. Single-file Python 3.13
+(stdlib only), no install beyond copy-to-PATH. Copy-only by default — it
+deletes from the source only after byte-length-verified copy AND explicit
+confirmation.
+
+## When to use
+
+- The user inserted a camera card / wants photos off a folder, organized by
+  capture date.
+- Re-importing a partially imported card: already-copied files are skipped
+  automatically (name+size dedupe), so re-running is always safe.
 
 ## Command contract
 
@@ -48,19 +58,30 @@ picimport -i PATH [-p PICTURES_DIR] [-V VIDEOS_DIR] [--config FILE] [-n] [-y]
 - The tool never touches files it does not recognize (unknown extensions are
   ignored, never deleted).
 
-## Using as a skill
+## Version check
 
-This repository ships a ready-made, agent-neutral skill at
-`skill/picimport/SKILL.md` (AgentSkills-compatible SKILL.md with YAML
-frontmatter — the same format Claude Code, OpenCode, OpenClaw, and Hermes
-load). `./install.sh` installs ONLY the CLI. Skills are never sprayed into
-every agent on the machine: when a user asks THIS agent to integrate the
-tool, the agent runs
-`./install.sh --skill-dir <its-own-skills-dir>` — one explicit target,
-chosen by the agent that owns it, at the moment its user asks.
+This skill documents `picimport` **1.0.0** (`tool-version` above). Before
+relying on the command contract, run `picimport --version`:
 
-## Maintenance
+- **Match** → proceed.
+- **Mismatch** → skill and tool have drifted apart; the command contract
+  above may be wrong. Refresh both from the source before continuing:
+  ```bash
+  git -C <your-clone-dir> pull && ./install.sh
+  # no clone yet? git clone https://github.com/obionar/picimport.git && cd picimport && ./install.sh
+  ```
+  Then re-run `--version` and reload this skill if it changed. Do not guess
+  how an unknown version behaves — old flags may be gone or renamed.
 
-- Tests: `python3 -m unittest discover tests` (synthetic TIFF/JPEG fixtures).
-- After behavior changes: keep the summary-line format stable — scripts and
-  agents parse it.
+## Install
+
+```bash
+git clone https://github.com/obionar/picimport.git
+cd picimport && ./install.sh --skill-dir ~/.your-agent/skills
+```
+
+`./install.sh` alone installs only the CLI; the skill goes into ONE
+explicitly passed skills dir — the agent integrating this tool passes its
+own (e.g. `~/.claude/skills`, `~/.hermes/skills`).
+
+No API keys, no configuration needed (config.toml is optional).

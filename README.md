@@ -29,6 +29,17 @@ Python 3.13 standard library only — no pip, no venv, no dependencies.
 
 ```bash
 git clone https://github.com/obionar/picimport.git
+cd picimport && ./install.sh
+```
+
+This installs the CLI to `~/.local/bin`. To also install the bundled
+agent skill (`skill/picimport/SKILL.md`, AgentSkills-compatible), pass your
+agent's skills dir explicitly: `./install.sh --skill-dir ~/.claude/skills`
+— skills are never auto-installed into every agent found; each agent
+integrates the skill itself when you ask it to. `--uninstall` removes
+both. Manual CLI-only alternative:
+
+```bash
 cp picimport/picimport ~/.local/bin/
 chmod +x ~/.local/bin/picimport
 ```
@@ -39,13 +50,15 @@ Any directory on `PATH` works; keep the file executable.
 
 If you use an AI agent with shell access (Hermes, OpenClaw, Claude Code, …),
 paste the repository URL into the agent chat and ask it to install the tool
-as a skill, e.g.:
+as a skill:
 
 > https://github.com/obionar/picimport — install this as a skill:
 > copy the script to ~/.local/bin (chmod +x), read AGENTS.md and follow it.
 
-`AGENTS.md` contains everything the agent needs: command contract, output
-shape, and boundaries.
+The repository ships a ready-made agent-neutral skill at
+`skill/picimport/SKILL.md`; the integrating agent installs it into its own
+skills dir via `./install.sh --skill-dir <dir>`. `AGENTS.md` contains
+everything the agent needs: command contract, output shape, and boundaries.
 
 ## Usage
 
