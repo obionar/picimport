@@ -2,7 +2,7 @@
 name: picimport
 description: Use when importing photos/videos from a card or folder into date-organized folders.
 license: GPL-3.0-only
-tool-version: 1.0.0
+tool-version: 1.1.0
 ---
 
 # picimport — EXIF-dated media import from the terminal
