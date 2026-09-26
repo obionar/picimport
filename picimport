@@ -28,9 +28,6 @@ from pathlib import Path
 
 VERSION = "1.1.0"
 
-from datetime import datetime
-from pathlib import Path
-
 # Preference order: best first.
 _DATE_TAGS = (0x9003, 0x9004, 0x0132)  # DateTimeOriginal, Digitized, DateTime
 _EXIF_IFD_TAG = 0x8769
@@ -163,17 +160,6 @@ def read_capture_datetime(path: Path) -> datetime | None:
 
 
 # ---------------------------------------------------------------------------
-# CLI section
-
-import argparse
-import os
-import shutil
-import sys
-import tomllib
-from datetime import date
-from pathlib import Path
-
-
 IMAGE_EXTENSIONS = frozenset(
     {
         ".jpg",
@@ -281,6 +267,24 @@ def import_photos(
     dry_run: bool = False,
     assume_yes: bool = False,
 ) -> int:
+    source = source.resolve()
+    pictures_dir = pictures_dir.expanduser().resolve()
+    videos_dir = videos_dir.expanduser().resolve()
+
+    # Guard: never import into the source tree itself
+    try:
+        pictures_dir.relative_to(source)
+        videos_dir.relative_to(source)
+    except ValueError:
+        pass  # good — dest is not inside source
+    else:
+        print(
+            f"error: destination ({pictures_dir} or {videos_dir}) is inside"
+            f" source ({source}); refusing to import into itself",
+            file=sys.stderr,
+        )
+        return 2
+
     if not source.is_dir():
         print(f"error: source is not a directory: {source}", file=sys.stderr)
         return 2
@@ -409,9 +413,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     return import_photos(
-        source.resolve(),
-        pictures_dir.expanduser(),
-        videos_dir.expanduser(),
+        source,
+        pictures_dir,
+        videos_dir,
         args.dry_run,
         args.yes,
     )

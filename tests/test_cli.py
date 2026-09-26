@@ -1,18 +1,5 @@
-import importlib.util
-import sys
-from importlib.machinery import SourceFileLoader
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parent.parent
-SCRIPT = ROOT / "picimport"
-
-if "picimport_mod" not in sys.modules:  # idempotent loader
-    _loader = SourceFileLoader("picimport_mod", str(SCRIPT))
-    _spec = importlib.util.spec_from_loader("picimport_mod", _loader)
-    picimport = importlib.util.module_from_spec(_spec)
-    sys.modules["picimport_mod"] = picimport
-    _loader.exec_module(picimport)
 import tempfile
+import _loader  # noqa: F401 — loads picimport as picimport_mod
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -164,6 +151,17 @@ class CliTest(unittest.TestCase):
         self.assertIn("1 image(s), 1 video(s) would be copied", out)
         self.assertFalse(pics.exists())
         self.assertFalse(vids.exists())
+
+    def test_import_refuses_dest_inside_source(self):
+        self.src.mkdir(parents=True)
+        dest = self.src / "nested"
+        dest.mkdir()
+        rc = import_photos(self.src, dest, dest)
+        self.assertEqual(rc, 2)
+
+    def test_import_refuses_dest_is_source(self):
+        rc = import_photos(self.src, self.src, self.src)
+        self.assertEqual(rc, 2)
 
 
 if __name__ == "__main__":
