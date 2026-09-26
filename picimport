@@ -402,14 +402,18 @@ def import_photos(
             continue
 
         prefix = f"[{done}/{total}] " if progress else ""
-        dest_rel = target.parent.name  # date folder or "Screenshots"
+        # Show dest relative to home: ~/Pictures/Import/2026-05-29/file.jpg
+        try:
+            dest_short = "~" / target.relative_to(Path.home())
+        except ValueError:
+            dest_short = target
 
         if dry_run:
-            print(f"{prefix}{src.name} → {dest_rel}/")
+            print(f"{prefix}{dest_short}")
             counts[kind] += 1
             continue
 
-        print(f"{prefix}{src.name} → {dest_rel}/")
+        print(f"{prefix}{dest_short}")
         try:
             dest_dir.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, target)
