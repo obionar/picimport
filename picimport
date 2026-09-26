@@ -212,7 +212,7 @@ def read_capture_datetime(path: Path) -> datetime | None:
             not dates
             and tiff is not None
             and len(tiff) == _TIFF_HEAD_BYTES
-            and path.getsize() > _TIFF_HEAD_BYTES
+            and path.stat().st_size > _TIFF_HEAD_BYTES
         ):
             # Rare: date tags pointed beyond the head chunk — reread whole.
             dates = _tiff_dates(path.read_bytes())
