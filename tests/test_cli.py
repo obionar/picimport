@@ -163,6 +163,60 @@ class CliTest(unittest.TestCase):
         rc = import_photos(self.src, self.src, self.src)
         self.assertEqual(rc, 2)
 
+    def test_screenshots_routed_to_screenshots_dir(self):
+        screenshots = self.tmp / "Pictures" / "Screenshots"
+        self.touch(self.src, "Screenshot_2026-09-07.png", b"ss1")
+        self.touch(self.src, "screenshot-2026-09-08.png", b"ss2")
+        self.touch(self.src, "IMG_1234.jpg", b"photo")
+        rc = import_photos(self.src, self.pics, self.vids, screenshots_dir=screenshots)
+        self.assertEqual(rc, 0)
+        day = datetime.now().strftime("%Y-%m-%d")  # noqa: DTZ005
+        # Screenshots go to ~/Pictures/Screenshots/ (flat)
+        self.assertTrue((screenshots / "Screenshot_2026-09-07.png").is_file())
+        self.assertTrue((screenshots / "screenshot-2026-09-08.png").is_file())
+        # Regular photo goes to date folder
+        self.assertTrue((self.pics / day / "IMG_1234.jpg").is_file())
+
+
+class ScreenshotRouteTest(unittest.TestCase):
+    """Test that screenshots are routed to ~/Pictures/Screenshots/."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(self._cleanup)
+        self.src = self.tmp / "card"
+        self.pics = self.tmp / "Pictures" / "Import"
+        self.vids = self.tmp / "Videos" / "Import"
+        self.screenshots = self.tmp / "Pictures" / "Screenshots"
+
+    def _cleanup(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def touch(self, name: str, content: bytes) -> Path:
+        self.src.mkdir(parents=True, exist_ok=True)
+        p = self.src / name
+        p.write_bytes(content)
+        return p
+
+    def test_screenshot_upper(self):
+        self.touch("Screenshot_2026-09-07.png", b"ss")
+        import_photos(self.src, self.pics, self.vids, screenshots_dir=self.screenshots)
+        expected = self.screenshots / "Screenshot_2026-09-07.png"
+        self.assertTrue(expected.is_file())
+
+    def test_screenshot_lower(self):
+        self.touch("screenshot-2026-09-08.jpg", b"ss")
+        import_photos(self.src, self.pics, self.vids, screenshots_dir=self.screenshots)
+        expected = self.screenshots / "screenshot-2026-09-08.jpg"
+        self.assertTrue(expected.is_file())
+
+    def test_non_screenshot_not_redirected(self):
+        self.touch("IMG_1234.jpg", b"photo")
+        import_photos(self.src, self.pics, self.vids, screenshots_dir=self.screenshots)
+        day = datetime.now().strftime("%Y-%m-%d")  # noqa: DTZ005
+        self.assertTrue((self.pics / day / "IMG_1234.jpg").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -263,6 +263,7 @@ MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 
 DEFAULT_PICTURES_DIR = Path.home() / "Pictures" / "Import"
 DEFAULT_VIDEOS_DIR = Path.home() / "Videos" / "Import"
+SCREENSHOTS_DIR = Path.home() / "Pictures" / "Screenshots"
 
 CONFIG_KEYS = ("source_dir", "pictures_dir", "videos_dir")
 
@@ -343,12 +344,12 @@ def import_photos(
     dry_run: bool = False,
     assume_yes: bool = False,
     progress: bool = False,
+    screenshots_dir: Path | None = None,
 ) -> int:
     source = source.resolve()
     pictures_dir = pictures_dir.expanduser().resolve()
     videos_dir = videos_dir.expanduser().resolve()
-
-    # Guard: never import into the source tree itself
+    screenshots_dir = (screenshots_dir or SCREENSHOTS_DIR).expanduser().resolve()
     try:
         pictures_dir.relative_to(source)
         videos_dir.relative_to(source)
@@ -385,7 +386,11 @@ def import_photos(
             print(f"error: {exc}", file=sys.stderr)
             failed += 1
             continue
-        dest_dir = roots[kind] / day.isoformat()
+        # Screenshots go to ~/Pictures/Screenshots/ (flat, no date subfolder)
+        if kind == "image" and src.name[:10].lower() == "screenshot":
+            dest_dir = screenshots_dir
+        else:
+            dest_dir = roots[kind] / day.isoformat()
         try:
             target = resolve_target(dest_dir, src)
         except OSError as exc:
@@ -470,6 +475,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"destination root for images (default: {DEFAULT_PICTURES_DIR})")
     parser.add_argument("-V", "--videos-dir", type=Path,
                         help=f"destination root for videos (default: {DEFAULT_VIDEOS_DIR})")
+    parser.add_argument("-S", "--screenshots-dir", type=Path,
+                        help=f"destination for screenshots (default: {SCREENSHOTS_DIR})")
     parser.add_argument("--config", type=Path,
                         help="alternative config file path")
     parser.add_argument("-n", "--dry-run", action="store_true",
@@ -505,6 +512,7 @@ def main(argv: list[str] | None = None) -> int:
         args.dry_run,
         args.yes,
         args.progress,
+        args.screenshots_dir,
     )
 
 
