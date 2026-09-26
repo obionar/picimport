@@ -26,7 +26,7 @@ import tomllib
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 # Preference order: best first.
 _DATE_TAGS = (0x9003, 0x9004, 0x0132)  # DateTimeOriginal, Digitized, DateTime
