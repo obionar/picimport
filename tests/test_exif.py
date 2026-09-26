@@ -231,8 +231,8 @@ class ProgressTest(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             self.import_photos(self.src, self.pics, self.vids, dry_run=True, progress=True)
         out = buf.getvalue()
-        self.assertIn("[1/2]", out)
-        self.assertIn("[2/2]", out)
+        self.assertIn("[1]", out)
+        self.assertIn("[2]", out)
 
     def test_no_progress_by_default(self):
         import contextlib

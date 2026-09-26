@@ -310,13 +310,6 @@ def iter_media(source: Path):
             yield path
 
 
-def count_media(source: Path) -> int:
-    """Fast count of media files (no sorting, just counting)."""
-    n = 0
-    for path in source.rglob("*"):
-        if path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS:
-            n += 1
-    return n
 
 
 def resolve_target(dest_dir: Path, src: Path) -> Path | None:
@@ -373,12 +366,10 @@ def import_photos(
     skipped = 0
     failed = 0
 
-    # Count files upfront for progress display
-    total = count_media(source) if progress else 0
+    # Running counter for progress display
     done = 0
 
     for src in iter_media(source):
-        done += 1
         kind = media_kind(src)
         try:
             day = capture_date(src)
@@ -401,7 +392,8 @@ def import_photos(
             skipped += 1
             continue
 
-        prefix = f"[{done}/{total}] " if progress else ""
+        done += 1
+        prefix = f"[{done}] " if progress else ""
         # Show dest relative to home: ~/Pictures/Import/2026-05-29/file.jpg
         try:
             dest_short = "~" / target.relative_to(Path.home())
