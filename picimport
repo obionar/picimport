@@ -131,6 +131,127 @@ _TIFF_HEAD_BYTES = 256 * 1024
 _MP4_EPOCH = datetime(1904, 1, 1)
 
 
+def _isobmff_find_box(fh, end: int, box_type: bytes) -> tuple[int, int] | None:
+    """Find a box by type within current range. Returns (offset, size) or None."""
+    while fh.tell() < end:
+        header = fh.read(8)
+        if len(header) < 8:
+            return None
+        size = struct.unpack(">I", header[:4])[0]
+        btype = header[4:8]
+        if size == 1:
+            ext = fh.read(8)
+            if len(ext) < 8:
+                return None
+            size = struct.unpack(">Q", ext)[0]
+        elif size == 0:
+            size = end - fh.tell() + 8
+        if btype == box_type:
+            return (fh.tell() - (16 if size > 0xFFFFFFFF else 8), size)
+        fh.seek(size - 8, 1)
+    return None
+
+
+def _heic_exif_data(path: Path) -> bytes | None:
+    """Extract EXIF data from a HEIC/HEIF file's ISOBMFF container."""
+    try:
+        with open(path, "rb") as fh:
+            file_end = path.stat().st_size
+            # Find 'meta' box at top level
+            result = _isobmff_find_box(fh, file_end, b"meta")
+            if not result:
+                return None
+            meta_offset, meta_size = result
+            # meta box starts with 4-byte version+flags
+            fh.seek(meta_offset + 12)  # skip size(4) + type(4) + version+flags(4)
+            meta_end = meta_offset + meta_size
+
+            # Find 'iinf' box to get Exif item ID
+            exif_item_id = None
+            result = _isobmff_find_box(fh, meta_end, b"iinf")
+            if result:
+                iinf_offset, iinf_size = result
+                fh.seek(iinf_offset + 12)  # skip size + type + version+flags
+                iinf_end = iinf_offset + iinf_size
+                # Parse item entries to find 'Exif' type
+                while fh.tell() < iinf_end - 8:
+                    entry_header = fh.read(8)
+                    if len(entry_header) < 8:
+                        break
+                    entry_size = struct.unpack(">I", entry_header[:4])[0]
+                    entry_type = entry_header[4:8]
+                    if entry_type == b"infe":
+                        # infe box: version(1) + flags(3) + item_ID(2) + item_type(4)
+                        fh.read(4)  # version + flags
+                        item_id = struct.unpack(">H", fh.read(2))[0]
+                        item_type = fh.read(4)
+                        if item_type == b"Exif":
+                            exif_item_id = item_id
+                            break
+                        # skip rest of entry
+                        remaining = entry_size - 8 - 4 - 2 - 4
+                        if remaining > 0:
+                            fh.read(remaining)
+                    else:
+                        fh.seek(entry_size - 8, 1)
+
+            if exif_item_id is None:
+                return None
+
+            # Find 'iloc' box to get offset of Exif item
+            result = _isobmff_find_box(fh, meta_end, b"iloc")
+            if not result:
+                return None
+            iloc_offset, iloc_size = result
+            fh.seek(iloc_offset + 8)  # skip size + type
+            iloc_header = struct.unpack(">I", fh.read(4))[0]
+            version = (iloc_header >> 24) & 0xFF
+            # Parse iloc fields
+            sizes = struct.unpack(">B", fh.read(1))[0]
+            offset_size = (sizes >> 4) & 0xF
+            length_size = sizes & 0xF
+            base_offset_size = struct.unpack(">B", fh.read(1))[0]
+            base_offset_size = (base_offset_size >> 4) & 0xF
+            if version < 2:
+                item_count = struct.unpack(">H", fh.read(2))[0]
+            else:
+                item_count = struct.unpack(">I", fh.read(4))[0]
+
+            for _ in range(item_count):
+                if version < 2:
+                    item_id = struct.unpack(">H", fh.read(2))[0]
+                else:
+                    item_id = struct.unpack(">I", fh.read(4))[0]
+                if version in (1, 2):
+                    fh.read(2)  # construction_method
+                fh.read(2)  # data_reference_index
+                base_offset = 0
+                if base_offset_size > 0:
+                    base_offset = int.from_bytes(fh.read(base_offset_size), "big")
+                extent_count = struct.unpack(">H", fh.read(2))[0]
+                for _ in range(extent_count):
+                    if version >= 1:
+                        fh.read(offset_size)  # extent_offset
+                    else:
+                        extent_offset = int.from_bytes(fh.read(offset_size), "big") if offset_size else 0
+                    extent_length = int.from_bytes(fh.read(length_size), "big")
+                    if item_id == exif_item_id:
+                        # Found Exif item — read its data
+                        exif_offset = base_offset + (extent_offset if version < 1 else 0)
+                        fh.seek(exif_offset)
+                        raw = fh.read(extent_length)
+                        # EXIF data starts with 'Exif\x00\x00' then TIFF
+                        if raw.startswith(b"Exif\x00\x00"):
+                            return raw[6:]
+                        # Some files just have raw TIFF
+                        if raw[:2] in (b"II", b"MM"):
+                            return raw
+                        return None
+            return None
+    except (OSError, struct.error):
+        return None
+
+
 def _mp4_creation_date(path: Path) -> datetime | None:
     """Parse the creation_time from the moov/mvhd atom in an MP4/MOV file."""
     try:
@@ -201,13 +322,24 @@ def read_capture_datetime(path: Path) -> datetime | None:
         if tiff:
             dates = _tiff_dates(tiff)
         else:
-            # MP4/MOV: look for moov/mvhd creation_time
             suffix = path.suffix.lower()
+            # MP4/MOV: look for moov/mvhd creation_time
             if suffix in (".mp4", ".mov", ".m4v", ".3gp", ".mts"):
                 mp4_dt = _mp4_creation_date(path)
                 if mp4_dt is not None:
                     return mp4_dt
-            dates = {}
+            # HEIC/HEIF: extract EXIF from ISOBMFF container
+            if suffix in (".heic", ".heif"):
+                heic_exif = _heic_exif_data(path)
+                if heic_exif:
+                    try:
+                        dates = _tiff_dates(heic_exif)
+                    except (ValueError, struct.error):
+                        dates = {}
+                else:
+                    dates = {}
+            else:
+                dates = {}
         if (
             not dates
             and tiff is not None

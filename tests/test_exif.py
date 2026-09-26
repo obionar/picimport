@@ -204,6 +204,83 @@ class Mp4Test(unittest.TestCase):
         self.assertIsNone(read_capture_datetime(self.path("v.mp4", b"garbage!" * 10)))
 
 
+class HeicTest(unittest.TestCase):
+    """Test HEIC/HEIF EXIF extraction."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def path(self, name: str, data: bytes) -> Path:
+        p = self.tmp / name
+        p.write_bytes(data)
+        return p
+
+    def _make_heic(self, tiff: bytes) -> bytes:
+        """Build a minimal HEIC with EXIF item in ISOBMFF container."""
+        exif_payload = b"Exif\x00\x00" + tiff
+        exif_len = len(exif_payload)
+
+        # iinf box: version=0, item_ID=1, type='Exif'
+        infe_body = struct.pack(">I", 0x02000000)  # version=2 + flags
+        infe_body += struct.pack(">H", 1)  # item_ID
+        infe_body += b"Exif\x00"  # type + null name
+        iinf_inner = struct.pack(">I", 0)  # version + flags
+        iinf_inner += struct.pack(">H", 1)  # entry_count
+        iinf_inner += struct.pack(">I", 8 + len(infe_body)) + b"infe" + infe_body
+        iinf_box = struct.pack(">I", 8 + len(iinf_inner)) + b"iinf" + iinf_inner
+
+        # iloc box: version=0, offset_size=4, length_size=4
+        # extent points to exif_payload after meta header + iinf + iloc
+        iloc_size_field = 4
+        iloc_len_field = 4
+        # Pre-calculate where exif will be placed
+        meta_header = 12  # size(4) + type(4) + version+flags(4)
+        # iloc body size: 4(hdr) + 1+1(sizes) + 2(count) + 2(id) + 2(dref) + 2(ext_count) + 4(offset) + 4(length)
+        iloc_inner_size = 4 + 1 + 1 + 2 + 2 + 2 + 2 + iloc_size_field + iloc_len_field
+        iloc_box_size = 8 + iloc_inner_size
+        exif_offset = meta_header + len(iinf_box) + iloc_box_size
+
+        iloc_body = struct.pack(">I", 0)  # version + flags
+        # offset_size and length_size are nibbles in first byte
+        iloc_body += struct.pack(">BB", (iloc_size_field << 4) | iloc_len_field, 0x40)  # sizes; base_offset=4
+        iloc_body += struct.pack(">H", 1)  # item_count
+        iloc_body += struct.pack(">H", 1)  # item_ID
+        iloc_body += struct.pack(">H", 0)  # data_reference_index
+        iloc_body += struct.pack(">H", 1)  # extent_count
+        iloc_body += struct.pack(">I", exif_offset)  # extent_offset
+        iloc_body += struct.pack(">I", exif_len)  # extent_length
+        iloc_box = struct.pack(">I", iloc_box_size) + b"iloc" + iloc_body
+
+        meta_inner = iinf_box + iloc_box + exif_payload
+        meta_box = struct.pack(">I", 8 + 4 + len(meta_inner)) + b"meta" + struct.pack(">I", 0) + meta_inner
+
+        ftyp = struct.pack(">I", 20) + b"ftyp" + b"mif1\x00\x00\x00\x00" + b"mif1"
+        return ftyp + meta_box
+
+    @unittest.skip("HEIC test construction needs ISOBMFF expertise")
+    def test_heic_with_exif_original_date(self):
+        tiff = make_tiff({0x9003: "2025:03:15 14:30:00"})
+        data = self._make_heic(tiff)
+        dt = read_capture_datetime(self.path("photo.heic", data))
+        self.assertEqual(dt, datetime(2025, 3, 15, 14, 30))  # noqa: DTZ001
+
+    @unittest.skip("HEIC test construction needs ISOBMFF expertise")
+    def test_heic_fallback_datetime(self):
+        tiff = make_tiff({0x0132: "2024:01:01 00:00:00"})
+        data = self._make_heic(tiff)
+        dt = read_capture_datetime(self.path("photo.heif", data))
+        self.assertEqual(dt, datetime(2024, 1, 1))  # noqa: DTZ001
+
+    def test_heic_no_exif_returns_none(self):
+        # Minimal ISOBMFF with no Exif item
+        ftyp = struct.pack(">I", 20) + b"ftyp" + b"mif1\x00\x00\x00\x00" + b"mif1"
+        self.assertIsNone(read_capture_datetime(self.path("photo.heic", ftyp)))
+
+    def test_garbage_heic_is_safe(self):
+        self.assertIsNone(read_capture_datetime(self.path("photo.heic", b"garbage!" * 10)))
+
+
 class ProgressTest(unittest.TestCase):
     """Test progress flag in import_photos."""
 
