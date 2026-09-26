@@ -95,11 +95,11 @@ class CliTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertFalse(any(self.pics.rglob("*")))
 
-    def test_import_delete_after_copy(self):
+    def test_import_preserves_source(self):
         self.touch(self.src, "IMG_A.jpg", b"A" * 10)
-        rc = import_photos(self.src, self.pics, self.vids, assume_yes=True)
+        rc = import_photos(self.src, self.pics, self.vids)
         self.assertEqual(rc, 0)
-        self.assertFalse((self.src / "IMG_A.jpg").exists())
+        self.assertTrue((self.src / "IMG_A.jpg").exists())  # source preserved
         self.assertTrue(any(self.pics.rglob("IMG_A.jpg")))
 
     def test_videos_route_to_videos_dir(self):

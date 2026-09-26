@@ -335,7 +335,6 @@ def import_photos(
     pictures_dir: Path,
     videos_dir: Path,
     dry_run: bool = False,
-    assume_yes: bool = False,
     progress: bool = False,
     screenshots_dir: Path | None = None,
 ) -> int:
@@ -430,29 +429,9 @@ def import_photos(
         )
         return 0
 
-    deleted = 0
-    # Every entry in `copied` passed the post-copy byte-length verification;
-    # failed files were never appended, so only safe candidates are listed.
-    if copied:
-        prompt = f"Delete {len(copied)} copied file(s) from {source}? [y/N] "
-        if assume_yes:
-            answer = "y"
-        else:
-            try:
-                answer = input(prompt).strip().lower()
-            except EOFError:
-                answer = ""
-        if answer in ("y", "yes"):
-            for src, _ in copied:
-                try:
-                    src.unlink()
-                    deleted += 1
-                except OSError as exc:
-                    print(f"error: could not delete {src}: {exc}", file=sys.stderr)
-
     print(
         f"Copied {counts['image']} image(s), {counts['video']} video(s), "
-        f"Skipped {skipped}, Failed {failed}, Deleted {deleted}"
+        f"Skipped {skipped}, Failed {failed}"
     )
     return 0
 
@@ -478,8 +457,6 @@ def build_parser() -> argparse.ArgumentParser:
                         help="alternative config file path")
     parser.add_argument("-n", "--dry-run", action="store_true",
                         help="show what would be done without copying")
-    parser.add_argument("-y", "--yes", action="store_true",
-                        help="auto-confirm deleting copied files from source")
     parser.add_argument("--progress", action="store_true",
                         help="show [X/Y] progress counter")
     parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
@@ -507,7 +484,6 @@ def main(argv: list[str] | None = None) -> int:
         pictures_dir,
         videos_dir,
         args.dry_run,
-        args.yes,
         args.progress,
         args.screenshots_dir,
     )

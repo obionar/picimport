@@ -6,10 +6,10 @@ nothing more, nothing less. Not affiliated with any camera vendor.
 
 ```
 $ picimport -i /media/ian/SDCARD/DCIM
-copying .../100NIKON/DSC_0001.JPG -> ~/Pictures/Import/2026-08-22/DSC_0001.JPG
-copying .../100NIKON/DSC_0002.NEF -> ~/Pictures/Import/2026-08-22/DSC_0002.NEF
-copying .../100NIKON/DSC_0003.JPG -> ~/Pictures/Import/2026-08-15/DSC_0003.JPG
-Copied 3 image(s), 0 video(s), Skipped 0, Failed 0, Deleted 0
+[1] ~/Pictures/Import/2026-08-22/DSC_0001.JPG
+[2] ~/Pictures/Import/2026-08-22/DSC_0002.NEF
+[3] ~/Pictures/Import/2026-08-15/DSC_0003.JPG
+Copied 3 image(s), 0 video(s), Skipped 0, Failed 0
 ```
 
 ## Why this exists
@@ -66,9 +66,10 @@ everything the agent needs: command contract, output shape, and boundaries.
 picimport -i PATH       source directory to import from (required unless set in config)
 picimport -p DIR        destination root for images (default: ~/Pictures/Import)
 picimport -V DIR        destination root for videos (default: ~/Videos/Import)
+picimport -S DIR        destination for screenshots (default: ~/Pictures/Screenshots)
 picimport --config FILE alternative config file path
 picimport -n            dry run: print planned copies, change nothing
-picimport -y            auto-confirm deletion after verified copy
+picimport --progress    show [X/Y] progress counter
 picimport --version     print version
 ```
 
@@ -88,9 +89,7 @@ videos_dir = "~/Videos/Import"
 
 1. Insert SD card, run `picimport -i /media/$USER/SDCARD/DCIM`.
 2. Review the summary line.
-3. Optionally answer `y` at the delete prompt to empty the copied shots off
-   the card — only files that were copied *and* verified are eligible.
-4. Later, after a few more shots on the same card, run the same command again:
+3. Later, after a few more shots on the same card, run the same command again:
    previously imported files are skipped instantly, only new ones are copied.
 
 ### Progress indicator
@@ -129,10 +128,6 @@ picimport -i /media/ian/SDCARD/DCIM --progress
 
 4. **Copy + verify** — `shutil.copyfile`, then compare destination and source
    byte lengths. A mismatch removes the partial copy and counts as failed.
-
-5. **Delete prompt** — shown once when there are verified copies:
-   `Delete N copied file(s) from <source>? [y/N]` (default no). `-y` skips
-   the prompt. Non-interactive stdin answers "no".
 
 Exit codes: `0` on success (including dry run), `2` on bad input (source not
 a directory / no source given).
