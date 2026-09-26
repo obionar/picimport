@@ -402,13 +402,14 @@ def import_photos(
             continue
 
         prefix = f"[{done}/{total}] " if progress else ""
+        dest_rel = target.parent.name  # date folder or "Screenshots"
 
         if dry_run:
-            print(f"{prefix}would copy {src} -> {target}")
+            print(f"{prefix}{src.name} → {dest_rel}/")
             counts[kind] += 1
             continue
 
-        print(f"{prefix}copying {src} -> {target}")
+        print(f"{prefix}{src.name} → {dest_rel}/")
         try:
             dest_dir.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, target)
