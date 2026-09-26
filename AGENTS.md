@@ -8,22 +8,20 @@ etc.) how to use this tool correctly. Keep it in prompts as-is.
 One-command media import for Linux: copies images into
 `~/Pictures/Import/<YYYY-MM-DD>/` and videos into `~/Videos/Import/<YYYY-MM-DD>/`
 by EXIF capture date. Single-file Python 3.13 (stdlib only), no install
-beyond copy-to-PATH. Copy-only by default — it deletes from the source only
-after byte-length-verified copy AND explicit confirmation.
+beyond copy-to-PATH. Copy-only — source files are always preserved.
 
 ## Command contract
 
 ```
-picimport -i PATH [-p PICTURES_DIR] [-V VIDEOS_DIR] [--config FILE] [-n] [-y]
+picimport -i PATH [-p PICTURES_DIR] [-V VIDEOS_DIR] [-S SCREENSHOTS_DIR] [--config FILE] [-n] [--progress]
 ```
 
 - `-i` (or `source_dir` in config) is required; missing source → exit 2.
 - `-n` dry run: prints planned copies, changes nothing, exit 0.
-- `-y` auto-confirms post-copy deletion. **Never pass `-y` unless the user
-  explicitly asked for source deletion.**
+- `--progress` show sequential counter during import.
 - Exit codes: `0` success (incl. dry run) · `2` bad input.
 - Progress goes to stdout, errors/warnings to stderr, one summary line at the
-  end: `Copied X image(s), Y video(s), Skipped N, Failed M, Deleted K`.
+  end: `Copied X image(s), Y video(s), Skipped N, Failed M`.
 
 ## Semantics an agent must respect
 
