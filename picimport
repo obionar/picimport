@@ -23,7 +23,7 @@ import shutil
 import struct
 import sys
 import tomllib
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 VERSION = "1.1.0"
@@ -127,6 +127,64 @@ def _jpeg_exif_tiff(path: Path) -> bytes | None:
 # head chunk — whole-file reads made dry runs minutes-slow on slow cards.
 _TIFF_HEAD_BYTES = 256 * 1024
 
+# MP4/MOV creation time epoch: 1904-01-01 (Macintosh/QuickTime origin)
+_MP4_EPOCH = datetime(1904, 1, 1)
+
+
+def _mp4_creation_date(path: Path) -> datetime | None:
+    """Parse the creation_time from the moov/mvhd atom in an MP4/MOV file."""
+    try:
+        with open(path, "rb") as fh:
+            # Walk top-level boxes looking for 'moov'
+            while True:
+                header = fh.read(8)
+                if len(header) < 8:
+                    return None
+                size = struct.unpack(">I", header[:4])[0]
+                box_type = header[4:8]
+                if size == 1:
+                    # 64-bit extended size
+                    ext = fh.read(8)
+                    if len(ext) < 8:
+                        return None
+                    size = struct.unpack(">Q", ext)[0]
+                    data_start = fh.tell() - 8 + 8  # after ext
+                elif size == 0:
+                    # extends to end of file
+                    return None
+                else:
+                    data_start = fh.tell()
+
+                if box_type == b"moov":
+                    # Scan inside moov for 'mvhd'
+                    moov_end = data_start + size - 8
+                    while fh.tell() < moov_end:
+                        mv_header = fh.read(8)
+                        if len(mv_header) < 8:
+                            return None
+                        mv_size = struct.unpack(">I", mv_header[:4])[0]
+                        mv_type = mv_header[4:8]
+                        if mv_size < 8:
+                            return None
+                        if mv_type == b"mvhd":
+                            version = struct.unpack(">B", fh.read(1))[0]
+                            fh.read(3)  # flags
+                            if version == 0:
+                                creation = struct.unpack(">I", fh.read(4))[0]
+                            else:
+                                creation = struct.unpack(">Q", fh.read(8))[0]
+                            if creation == 0:
+                                return None
+                            return _MP4_EPOCH + timedelta(seconds=creation)
+                        else:
+                            fh.seek(mv_size - 8, 1)  # skip this box
+                    return None
+                else:
+                    # Skip this top-level box
+                    fh.seek(size - 8, 1)
+    except (OSError, struct.error):
+        return None
+
 
 def read_capture_datetime(path: Path) -> datetime | None:
     """Best-effort EXIF capture datetime; None if unavailable."""
@@ -140,11 +198,19 @@ def read_capture_datetime(path: Path) -> datetime | None:
                 tiff = fh.read(_TIFF_HEAD_BYTES)
         else:
             tiff = None
-        if not tiff:
-            return None
-        dates = _tiff_dates(tiff)
+        if tiff:
+            dates = _tiff_dates(tiff)
+        else:
+            # MP4/MOV: look for moov/mvhd creation_time
+            suffix = path.suffix.lower()
+            if suffix in (".mp4", ".mov", ".m4v", ".3gp", ".mts"):
+                mp4_dt = _mp4_creation_date(path)
+                if mp4_dt is not None:
+                    return mp4_dt
+            dates = {}
         if (
             not dates
+            and tiff is not None
             and len(tiff) == _TIFF_HEAD_BYTES
             and path.getsize() > _TIFF_HEAD_BYTES
         ):
@@ -237,9 +303,19 @@ def capture_date(path: Path) -> date:
 
 
 def iter_media(source: Path):
+    """Yield all media files in source, sorted."""
     for path in sorted(source.rglob("*")):
         if path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS:
             yield path
+
+
+def count_media(source: Path) -> int:
+    """Fast count of media files (no sorting, just counting)."""
+    n = 0
+    for path in source.rglob("*"):
+        if path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS:
+            n += 1
+    return n
 
 
 def resolve_target(dest_dir: Path, src: Path) -> Path | None:
@@ -266,6 +342,7 @@ def import_photos(
     videos_dir: Path,
     dry_run: bool = False,
     assume_yes: bool = False,
+    progress: bool = False,
 ) -> int:
     source = source.resolve()
     pictures_dir = pictures_dir.expanduser().resolve()
@@ -295,7 +372,12 @@ def import_photos(
     skipped = 0
     failed = 0
 
+    # Count files upfront for progress display
+    total = count_media(source) if progress else 0
+    done = 0
+
     for src in iter_media(source):
+        done += 1
         kind = media_kind(src)
         try:
             day = capture_date(src)
@@ -314,12 +396,14 @@ def import_photos(
             skipped += 1
             continue
 
+        prefix = f"[{done}/{total}] " if progress else ""
+
         if dry_run:
-            print(f"would copy {src} -> {target}")
+            print(f"{prefix}would copy {src} -> {target}")
             counts[kind] += 1
             continue
 
-        print(f"copying {src} -> {target}")
+        print(f"{prefix}copying {src} -> {target}")
         try:
             dest_dir.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, target)
@@ -392,6 +476,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="show what would be done without copying")
     parser.add_argument("-y", "--yes", action="store_true",
                         help="auto-confirm deleting copied files from source")
+    parser.add_argument("--progress", action="store_true",
+                        help="show [X/Y] progress counter")
     parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     return parser
 
@@ -418,6 +504,7 @@ def main(argv: list[str] | None = None) -> int:
         videos_dir,
         args.dry_run,
         args.yes,
+        args.progress,
     )
 
 

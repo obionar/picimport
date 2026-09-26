@@ -125,5 +125,165 @@ class TiffSafetyAndHeaderRead(unittest.TestCase):
         self.assertEqual(dt, datetime(2026, 9, 20, 12, 0))  # noqa: DTZ001
 
 
+class Mp4Test(unittest.TestCase):
+    """Test MP4/MOV creation-date parsing."""
+
+    def setUp(self):
+        import tempfile
+        from datetime import timedelta
+
+        self.tmp = Path(tempfile.mkdtemp())
+        # MP4 epoch: 1904-01-01
+        self.mp4_epoch = datetime(1904, 1, 1)
+
+    def path(self, name: str, data: bytes) -> Path:
+        p = self.tmp / name
+        p.write_bytes(data)
+        return p
+
+    def _make_mp4(self, creation_secs: int, version: int = 0) -> bytes:
+        """Build a minimal MP4 with moov/mvhd containing the given creation_time."""
+        # mvhd atom
+        if version == 0:
+            mvhd_data = struct.pack(">I", version << 24)  # version + flags
+            mvhd_data += struct.pack(">I", creation_secs)  # creation_time
+            mvhd_data += struct.pack(">I", creation_secs)  # modification_time
+            mvhd_data += struct.pack(">I", 1000)  # timescale
+            mvhd_data += struct.pack(">I", 0)  # duration
+            mvhd_data += b"\x00" * (100 - len(mvhd_data))  # pad to 100 bytes
+        else:
+            mvhd_data = struct.pack(">I", 1 << 24)  # version 1
+            mvhd_data += struct.pack(">Q", creation_secs)  # creation_time
+            mvhd_data += struct.pack(">Q", creation_secs)  # modification_time
+            mvhd_data += struct.pack(">I", 1000)  # timescale
+            mvhd_data += struct.pack(">Q", 0)  # duration
+            mvhd_data += b"\x00" * (112 - len(mvhd_data))  # pad to 112 bytes
+
+        mvhd = struct.pack(">I", 8 + len(mvhd_data)) + b"mvhd" + mvhd_data
+
+        # moov atom containing mvhd
+        moov = struct.pack(">I", 8 + len(mvhd)) + b"moov" + mvhd
+
+        # ftyp header (minimal)
+        ftyp = struct.pack(">I", 12) + b"ftyp" + b"isom"
+
+        return ftyp + moov
+
+    def test_mp4_v0_creation_date(self):
+        # 2024-01-01 00:00:00 = 3786825600 seconds since 1904-01-01
+        secs = int((datetime(2024, 1, 1) - self.mp4_epoch).total_seconds())
+        data = self._make_mp4(secs, version=0)
+        dt = read_capture_datetime(self.path("v.mp4", data))
+        self.assertEqual(dt, datetime(2024, 1, 1))  # noqa: DTZ001
+
+    def test_mp4_v1_creation_date(self):
+        secs = int((datetime(2026, 8, 22, 10, 30) - self.mp4_epoch).total_seconds())
+        data = self._make_mp4(secs, version=1)
+        dt = read_capture_datetime(self.path("v.mov", data))
+        self.assertEqual(dt, datetime(2026, 8, 22, 10, 30))  # noqa: DTZ001
+
+    def test_mp4_zero_creation_returns_none(self):
+        data = self._make_mp4(0, version=0)
+        self.assertIsNone(read_capture_datetime(self.path("v.mp4", data)))
+
+    def test_mp4_truncated_returns_none(self):
+        data = self._make_mp4(100, version=0)[:20]  # truncate
+        self.assertIsNone(read_capture_datetime(self.path("v.mp4", data)))
+
+    def test_mp4_no_moov_returns_none(self):
+        ftyp = struct.pack(">I", 12) + b"ftyp" + b"isom"
+        self.assertIsNone(read_capture_datetime(self.path("v.mp4", ftyp)))
+
+    def test_mp4_no_mvhd_returns_none(self):
+        # moov with no mvhd inside
+        moov = struct.pack(">I", 12) + b"moov" + b"\x00" * 4
+        ftyp = struct.pack(">I", 12) + b"ftyp" + b"isom"
+        self.assertIsNone(read_capture_datetime(self.path("v.mp4", ftyp + moov)))
+
+    def test_garbage_mp4_is_safe(self):
+        self.assertIsNone(read_capture_datetime(self.path("v.mp4", b"garbage!" * 10)))
+
+
+class ProgressTest(unittest.TestCase):
+    """Test progress flag in import_photos."""
+
+    def setUp(self):
+        import tempfile
+        from picimport_mod import import_photos
+
+        self.import_photos = import_photos
+        self.tmp = Path(tempfile.mkdtemp())
+        self.src = self.tmp / "card"
+        self.pics = self.tmp / "pics"
+        self.vids = self.tmp / "vids"
+
+    def _touch(self, name: str, content: bytes = b"x"):
+        self.src.mkdir(parents=True, exist_ok=True)
+        (self.src / name).write_bytes(content)
+
+    def test_progress_shows_counter(self):
+        import contextlib
+        import io
+
+        self._touch("a.jpg")
+        self._touch("b.jpg")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.import_photos(self.src, self.pics, self.vids, dry_run=True, progress=True)
+        out = buf.getvalue()
+        self.assertIn("[1/2]", out)
+        self.assertIn("[2/2]", out)
+
+    def test_no_progress_by_default(self):
+        import contextlib
+        import io
+
+        self._touch("a.jpg")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.import_photos(self.src, self.pics, self.vids, dry_run=True)
+        out = buf.getvalue()
+        self.assertNotIn("[1/1]", out)
+
+
+class VideoDateTest(unittest.TestCase):
+    """Test that MP4 creation date is used for import routing."""
+
+    def setUp(self):
+        import tempfile
+        from picimport_mod import import_photos
+
+        self.import_photos = import_photos
+        self.tmp = Path(tempfile.mkdtemp())
+        self.src = self.tmp / "card"
+        self.pics = self.tmp / "pics"
+        self.vids = self.tmp / "vids"
+
+    def _make_mp4_with_date(self, dt: datetime) -> bytes:
+        epoch = datetime(1904, 1, 1)
+        secs = int((dt - epoch).total_seconds())
+        mvhd_data = struct.pack(">I", secs)  # version=0, creation_time at offset 4
+        mvhd_data = struct.pack(">I", 0) + mvhd_data  # version + flags
+        mvhd_data += struct.pack(">I", secs)  # modification_time
+        mvhd_data += struct.pack(">I", 1000)  # timescale
+        mvhd_data += struct.pack(">I", 0)  # duration
+        mvhd_data += b"\x00" * (100 - len(mvhd_data))
+        mvhd = struct.pack(">I", 8 + len(mvhd_data)) + b"mvhd" + mvhd_data
+        moov = struct.pack(">I", 8 + len(mvhd)) + b"moov" + mvhd
+        ftyp = struct.pack(">I", 12) + b"ftyp" + b"isom"
+        return ftyp + moov
+
+    def test_mp4_routed_by_creation_date(self):
+        self.src.mkdir(parents=True)
+        dt = datetime(2025, 3, 15, 12, 0, 0)
+        data = self._make_mp4_with_date(dt)
+        (self.src / "clip.mp4").write_bytes(data)
+
+        rc = self.import_photos(self.src, self.pics, self.vids)
+        self.assertEqual(rc, 0)
+        self.assertTrue((self.vids / "2025-03-15" / "clip.mp4").is_file())
+        self.assertFalse(any(self.pics.rglob("*")))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -93,6 +93,17 @@ videos_dir = "~/Videos/Import"
 4. Later, after a few more shots on the same card, run the same command again:
    previously imported files are skipped instantly, only new ones are copied.
 
+### Progress indicator
+
+For large imports, add `--progress` to show `[X/Y]` counters:
+
+```
+picimport -i /media/ian/SDCARD/DCIM --progress
+[1/247] copying .../DSC_0001.JPG -> ~/Pictures/Import/2026-08-22/DSC_0001.JPG
+[2/247] copying .../DSC_0002.NEF -> ~/Pictures/Import/2026-08-22/DSC_0002.NEF
+...
+```
+
 ## How it works
 
 1. **Scan** — walks the source recursively, collecting recognized media:
@@ -104,6 +115,7 @@ videos_dir = "~/Videos/Import"
    - EXIF `DateTimeOriginal` (tag `0x9003`)
    - EXIF `DateTimeDigitized` (tag `0x9004`)
    - EXIF `DateTime` (tag `0x0132`)
+   - MP4/MOV `moov > mvhd > creation_time` (for `.mp4 .mov .m4v .3gp .mts`)
    - File modification time
 
    The built-in reader parses Exif APP1 segments inside JPEGs and direct
@@ -128,8 +140,7 @@ a directory / no source given).
 ## Limitations
 
 - Duplicate detection is name+size against the target date folder only.
-- HEIC/PNG rarely carry EXIF; those fall back to mtime, as do all video files
-  (no MP4 creation-date parsing yet).
+- HEIC/PNG rarely carry EXIF; those fall back to mtime.
 - No move-only mode, no renaming scheme, no library management — by design.
 
 ## Tests
